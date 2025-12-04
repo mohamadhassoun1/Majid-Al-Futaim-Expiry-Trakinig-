@@ -259,6 +259,82 @@ app.post('/ai/ask', authMiddleware, async (req, res) => {
     }
 });
 
+// ADMIN IMPORT ENDPOINT
+// Accepts demo/local data (staff, accessCodes, items) and inserts them into the persistent DB.
+// Body shape: { staff: [...], accessCodes: [...], items: [...] }
+app.post('/admin/import', authMiddleware, (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+
+    const { staff: importStaff = [], accessCodes: importCodes = [], items: importItems = [] } = req.body || {};
+    const added = { staff: 0, accessCodes: 0, items: 0, skipped: { staff: 0, accessCodes: 0, items: 0 } };
+
+    try {
+        // Insert staff
+        importStaff.forEach(s => {
+            if (!s || !s.staffId || !s.storeId) {
+                added.skipped.staff++;
+                return;
+            }
+            const existing = staffOperations.getStaffById(s.staffId);
+            if (!existing) {
+                staffOperations.addStaff(s.staffId, s.name || s.staffId, s.storeId);
+                added.staff++;
+            } else {
+                added.skipped.staff++;
+            }
+        });
+
+        // Insert access codes
+        importCodes.forEach(c => {
+            if (!c || !c.code || !c.staffId) {
+                added.skipped.accessCodes++;
+                return;
+            }
+            const existing = accessCodeOperations.getAccessCodeByCode(c.code);
+            if (!existing) {
+                // Ensure staff exists
+                const staffExists = staffOperations.getStaffById(c.staffId);
+                if (!staffExists) {
+                    // skip codes for non-existent staff
+                    added.skipped.accessCodes++;
+                    return;
+                }
+                accessCodeOperations.addAccessCode(c.code.toUpperCase(), c.staffId);
+                added.accessCodes++;
+            } else {
+                added.skipped.accessCodes++;
+            }
+        });
+
+        // Insert items
+        importItems.forEach(it => {
+            if (!it || !it.itemId || !it.name || !it.expirationDate || !it.quantity) {
+                added.skipped.items++;
+                return;
+            }
+            const existing = itemOperations.getItemById(it.itemId);
+            if (!existing) {
+                // ensure referenced staff/store exist; if not, skip
+                const staffExists = staffOperations.getStaffById(it.addedByStaffId);
+                const storeExists = storeOperations.getStore(it.storeCode);
+                if (!staffExists || !storeExists) {
+                    added.skipped.items++;
+                    return;
+                }
+                itemOperations.addItem(it.itemId, it.name, it.category || null, it.expirationDate, parseInt(it.quantity, 10), it.imageUrl || null, it.addedByStaffId, it.storeCode);
+                added.items++;
+            } else {
+                added.skipped.items++;
+            }
+        });
+
+        res.json({ success: true, added });
+    } catch (err) {
+        console.error('Import error:', err);
+        res.status(500).json({ error: 'Import failed', details: err?.message });
+    }
+});
+
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
