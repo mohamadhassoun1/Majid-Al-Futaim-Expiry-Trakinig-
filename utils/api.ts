@@ -1,12 +1,47 @@
 
 // utils/api.ts
 
-// Use environment variable for production.
-const rawUrl = (import.meta as any).env?.VITE_API_URL;
-const BASE_URL = rawUrl ? rawUrl.replace(/\/$/, '') : '';
+// Use environment variable for production. If it's not set (e.g. Vercel env not available),
+// allow a runtime `config.json` served from the frontend to provide the `API_URL`.
+let rawUrl = (import.meta as any).env?.VITE_API_URL;
+let BASE_URL = rawUrl ? rawUrl.replace(/\/$/, '') : '';
+
+let runtimeConfigLoaded = false;
+let runtimeConfigLoading: Promise<void> | null = null;
+
+const loadRuntimeConfig = async () => {
+    if (runtimeConfigLoaded) return;
+    if (runtimeConfigLoading) return runtimeConfigLoading;
+
+    runtimeConfigLoading = (async () => {
+        try {
+            // Try fetch a JSON file at /config.json that can contain { "API_URL": "https://..." }
+            const res = await fetch('/config.json', { cache: 'no-store' });
+            if (res.ok) {
+                const cfg = await res.json().catch(() => null);
+                if (cfg && cfg.API_URL && typeof cfg.API_URL === 'string') {
+                    BASE_URL = cfg.API_URL.replace(/\/$/, '');
+                }
+            }
+        } catch (e) {
+            // ignore; runtime config optional
+        } finally {
+            runtimeConfigLoaded = true;
+            runtimeConfigLoading = null;
+        }
+    })();
+
+    return runtimeConfigLoading;
+};
 
 const apiRequest = async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: object) => {
     const isGetWithParams = method === 'GET' && path.startsWith('?');
+
+    // Ensure runtime config has loaded if BASE_URL not set
+    if (!BASE_URL) {
+        await loadRuntimeConfig();
+    }
+
     const url = isGetWithParams ? `${BASE_URL}${path}&_=${Date.now()}` : `${BASE_URL}${path}`;
     
     // Increased timeout to 5 seconds for better reliability
